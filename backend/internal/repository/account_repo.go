@@ -1063,6 +1063,18 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 			s.OrderBy(tieOrder(s.C(dbaccount.FieldID)))
 		}}
 	}
+	if sortBy == "usage_5h" || sortBy == "usage_7d" {
+		direction := "ASC"
+		if sortOrder == pagination.SortOrderDesc {
+			direction = "DESC"
+		}
+		return []func(*entsql.Selector){func(s *entsql.Selector) {
+			extra := s.C(dbaccount.FieldExtra)
+			expression := accountUsageSortExpression(extra, sortBy)
+			s.OrderExpr(entsql.Expr(expression + " " + direction + " NULLS LAST"))
+			s.OrderBy(entsql.Asc(s.C(dbaccount.FieldID)))
+		}}
+	}
 
 	field := dbaccount.FieldName
 	defaultOrder := true
@@ -1102,6 +1114,28 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 		return []func(*entsql.Selector){dbent.Asc(dbaccount.FieldName), dbent.Asc(dbaccount.FieldID)}
 	}
 	return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(dbaccount.FieldID)}
+}
+
+func accountUsageSortExpression(extra, sortBy string) string {
+	var codexKey, passiveKey string
+	switch sortBy {
+	case "usage_5h":
+		codexKey = "codex_5h_used_percent"
+		passiveKey = "session_window_utilization"
+	case "usage_7d":
+		codexKey = "codex_7d_used_percent"
+		passiveKey = "passive_usage_7d_utilization"
+	default:
+		return ""
+	}
+
+	codexJSON := extra + " -> '" + codexKey + "'"
+	codexText := extra + " ->> '" + codexKey + "'"
+	passiveJSON := extra + " -> '" + passiveKey + "'"
+	passiveText := extra + " ->> '" + passiveKey + "'"
+	codexPercent := "(CASE WHEN jsonb_typeof(" + codexJSON + ") = 'number' THEN (" + codexText + ")::numeric END)"
+	passivePercent := "(CASE WHEN jsonb_typeof(" + passiveJSON + ") = 'number' THEN (" + passiveText + ")::numeric * 100 END)"
+	return "COALESCE(" + codexPercent + ", " + passivePercent + ")"
 }
 
 func upstreamBillingRateSortExpression(extra string) string {

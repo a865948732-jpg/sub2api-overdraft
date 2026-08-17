@@ -85,6 +85,46 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
     wrapper.unmount()
   })
 
+  it('自动刷新信号只查询次数，请求未结束时跳过且绝不触发重置', async () => {
+    let resolveQuery!: (value: any) => void
+    vi.mocked(refreshOpenAIQuota).mockImplementation(() => new Promise((resolve) => {
+      resolveQuery = resolve
+    }))
+
+    const account = makeAccount({ parent_account_id: null })
+    const wrapper = mount(OpenAIQuotaResetCell, {
+      props: { account, autoRefreshToken: 0 }
+    })
+
+    await wrapper.setProps({ autoRefreshToken: 1 })
+    await flushPromises()
+    expect(refreshOpenAIQuota).toHaveBeenCalledTimes(1)
+    expect(refreshOpenAIQuota).toHaveBeenCalledWith(account.id)
+
+    await wrapper.setProps({ autoRefreshToken: 2 })
+    await flushPromises()
+    expect(refreshOpenAIQuota).toHaveBeenCalledTimes(1)
+    expect(resetOpenAIQuota).not.toHaveBeenCalled()
+
+    resolveQuery({
+      rate_limit_reset_credits: { available_count: 0, credits: [] },
+      fetched_at: 1770000000,
+      cache_persisted: true,
+    })
+    await flushPromises()
+
+    vi.mocked(refreshOpenAIQuota).mockResolvedValue({
+      rate_limit_reset_credits: { available_count: 0, credits: [] },
+      fetched_at: 1770000030,
+      cache_persisted: true,
+    })
+    await wrapper.setProps({ autoRefreshToken: 3 })
+    await flushPromises()
+    expect(refreshOpenAIQuota).toHaveBeenCalledTimes(2)
+    expect(resetOpenAIQuota).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('从账号 extra 缓存恢复重置卡次数和到期时间', () => {
     const account = makeAccount({
       parent_account_id: null,

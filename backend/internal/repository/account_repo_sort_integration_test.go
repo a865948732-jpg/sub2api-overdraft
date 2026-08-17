@@ -71,6 +71,46 @@ func (s *AccountRepoSuite) TestListWithFilters_SortByUpstreamBillingRateWithMiss
 	}
 }
 
+func (s *AccountRepoSuite) TestListWithFilters_SortByUsageWindowsAcrossPagesWithMissingLast() {
+	makeAccount := func(name string, usage5h, usage7d any) {
+		extra := map[string]any{}
+		if usage5h != nil {
+			extra["codex_5h_used_percent"] = usage5h
+		}
+		if usage7d != nil {
+			extra["codex_7d_used_percent"] = usage7d
+		}
+		mustCreateAccount(s.T(), s.client, &service.Account{
+			Name: name, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: extra,
+		})
+	}
+
+	makeAccount("low-5h-high-7d", 10.0, 90.0)
+	makeAccount("high-5h-low-7d", 80.0, 20.0)
+	makeAccount("zero-usage", 0.0, 0.0)
+	makeAccount("missing-usage", nil, nil)
+
+	for _, tc := range []struct {
+		sortBy string
+		want   []string
+	}{
+		{sortBy: "usage_5h", want: []string{"high-5h-low-7d", "low-5h-high-7d", "zero-usage", "missing-usage"}},
+		{sortBy: "usage_7d", want: []string{"low-5h-high-7d", "high-5h-low-7d", "zero-usage", "missing-usage"}},
+	} {
+		var got []string
+		for page := 1; page <= 2; page++ {
+			accounts, _, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{
+				Page: page, PageSize: 2, SortBy: tc.sortBy, SortOrder: "desc",
+			}, service.PlatformOpenAI, service.AccountTypeOAuth, "", "", 0, "")
+			s.Require().NoError(err)
+			for _, account := range accounts {
+				got = append(got, account.Name)
+			}
+		}
+		s.Require().Equal(tc.want, got)
+	}
+}
+
 func (s *AccountRepoSuite) TestListWithFilters_SortByCurrentUpstreamBillingRateDuringPeak() {
 	now := time.Now()
 	locations := []string{"UTC", "Asia/Shanghai", "America/New_York", "Europe/London"}

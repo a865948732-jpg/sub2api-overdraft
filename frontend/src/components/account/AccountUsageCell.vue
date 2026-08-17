@@ -166,7 +166,11 @@
           refresh button is rendered via the pre-actions slot so the user sees a
           single row of related buttons instead of two stacked rows.
         -->
-        <OpenAIQuotaResetCell :account="account" @account-updated="handleQuotaResetAccountUpdated">
+        <OpenAIQuotaResetCell
+          :account="account"
+          :auto-refresh-token="autoRefreshToken"
+          @account-updated="handleQuotaResetAccountUpdated"
+        >
           <template #pre-actions>
             <button
               type="button"
@@ -210,6 +214,7 @@
         <!-- Always allow on-demand upstream quota query, even before local data exists. -->
         <OpenAIQuotaResetCell
           :account="account"
+          :auto-refresh-token="autoRefreshToken"
           class="mt-1"
           @account-updated="handleQuotaResetAccountUpdated"
         />
@@ -663,6 +668,7 @@ const props = withDefaults(
     todayStats?: WindowStats | null
     todayStatsLoading?: boolean
     manualRefreshToken?: number
+    autoRefreshToken?: number
     batchedUsage?: AccountUsageInfo | null
     batchedUsageError?: string | null
     batchedUsageLoading?: boolean
@@ -672,6 +678,7 @@ const props = withDefaults(
     todayStats: null,
     todayStatsLoading: false,
     manualRefreshToken: 0,
+    autoRefreshToken: 0,
     batchedUsage: null,
     batchedUsageError: null,
     batchedUsageLoading: false,
@@ -1474,9 +1481,14 @@ const attachVisibilityObserver = () => {
 }
 
 const loadActiveUsage = async () => {
+  if (activeQueryLoading.value || loading.value || props.batchedUsageLoading) return
   activeQueryLoading.value = true
   try {
-    usageInfo.value = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    const result = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    if (!unmounted.value) {
+      usageInfo.value = result
+      _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+    }
   } catch (e: any) {
     console.error('Failed to load active usage:', e)
   } finally {
@@ -1676,6 +1688,15 @@ watch(
     loadUsage({ source, bypassCache: true }).catch((e) => {
       console.error('Failed to refresh usage after manual refresh:', e)
     })
+  }
+)
+
+watch(
+  () => props.autoRefreshToken,
+  (nextToken, previousToken) => {
+    if (nextToken === previousToken) return
+    if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
+    void loadActiveUsage()
   }
 )
 

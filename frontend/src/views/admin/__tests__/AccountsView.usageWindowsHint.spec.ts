@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
@@ -75,8 +75,9 @@ const DataTableStub = {
           <slot :name="'header-' + column.key" :column="column" />
         </div>
       </template>
-      <div v-for="row in data" :key="row.id" data-test="account-rate">
-        <slot name="cell-rate_multiplier" :row="row" />
+      <div v-for="row in data" :key="row.id">
+        <div data-test="account-rate"><slot name="cell-rate_multiplier" :row="row" /></div>
+        <slot name="cell-usage" :row="row" />
       </div>
     </div>
   `
@@ -121,7 +122,10 @@ function mountView() {
         AccountStatusIndicator: true,
         AccountTodayStatsCell: true,
         AccountGroupsCell: true,
-        AccountUsageCell: true,
+        AccountUsageCell: {
+          props: ['account', 'autoRefreshToken'],
+          template: '<span data-test="usage-refresh-token">{{ autoRefreshToken }}</span>'
+        },
         Icon: true
       }
     }
@@ -155,6 +159,11 @@ describe('admin AccountsView usage windows hint', () => {
     getAllGroups.mockResolvedValue([])
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+  })
+
   it('renders an explanatory tooltip next to the usage windows column header', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -167,6 +176,79 @@ describe('admin AccountsView usage windows hint', () => {
     const hint = wrapper.find('[data-test="usage-windows-hint"]')
     expect(hint.exists()).toBe(true)
     expect(hint.text()).toBe('admin.accounts.usageWindowsHint')
+  })
+
+  it('renders independent 5h/7d global sort controls and sends server-side sort params', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const fiveHourSort = wrapper.get('[data-testid="usage-sort-5h"]')
+    const sevenDaySort = wrapper.get('[data-testid="usage-sort-7d"]')
+    expect(fiveHourSort.text()).toContain('5h')
+    expect(sevenDaySort.text()).toContain('7d')
+
+    await fiveHourSort.trigger('click')
+    await flushPromises()
+    expect(listAccounts).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({
+      sort_by: 'usage_5h',
+      sort_order: 'desc'
+    }), expect.any(Object))
+
+    await fiveHourSort.trigger('click')
+    await flushPromises()
+    expect(listAccounts).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({
+      sort_by: 'usage_5h',
+      sort_order: 'asc'
+    }), expect.any(Object))
+
+    await sevenDaySort.trigger('click')
+    await flushPromises()
+    expect(listAccounts).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({
+      sort_by: 'usage_7d',
+      sort_order: 'desc'
+    }), expect.any(Object))
+    wrapper.unmount()
+  })
+
+  it('immediately refreshes visible usage, repeats every 30s, and pauses while hidden', async () => {
+    vi.useFakeTimers()
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    listAccounts.mockResolvedValue({
+      items: [{
+        id: 77,
+        name: 'codex-account',
+        platform: 'openai',
+        type: 'oauth',
+        status: 'active',
+        schedulable: true,
+        created_at: '2026-08-17T00:00:00Z',
+        updated_at: '2026-08-17T00:00:00Z'
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const token = () => Number(wrapper.get('[data-test="usage-refresh-token"]').text())
+    const initialToken = token()
+    expect(initialToken).toBeGreaterThan(0)
+    expect(wrapper.get('[data-testid="usage-auto-refresh"]').attributes('data-countdown')).toBe('30')
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(token()).toBe(initialToken + 1)
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(token()).toBe(initialToken + 1)
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(token()).toBe(initialToken + 2)
+    wrapper.unmount()
   })
 
   it('keeps Ollama Cloud in the single usage column and ignores legacy column preferences', async () => {

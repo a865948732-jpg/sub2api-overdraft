@@ -62,6 +62,20 @@
                 </div>
               </div>
 
+              <button
+                type="button"
+                data-testid="usage-auto-refresh"
+                :data-countdown="usageAutoRefreshCountdown"
+                class="btn btn-secondary px-2 md:px-3"
+                :title="t('admin.accounts.usageAutoRefreshTitle')"
+                @click="triggerUsageAutoRefresh"
+              >
+                <Icon name="refresh" size="sm" class="animate-spin" />
+                <span class="hidden md:inline">
+                  {{ t('admin.accounts.usageAutoRefreshCountdown', { seconds: usageAutoRefreshCountdown }) }}
+                </span>
+              </button>
+
               <!-- More Tools Dropdown -->
               <div class="relative" ref="accountToolsDropdownRef">
                 <button
@@ -307,9 +321,37 @@
             <AccountGroupsCell :groups="row.groups" :max-display="4" />
           </template>
           <template #header-usage="{ column }">
-            <div class="flex items-center">
-              <span>{{ column.label }}</span>
-              <HelpTooltip :content="t('admin.accounts.usageWindowsHint')" width-class="w-72" />
+            <div class="flex flex-col items-start gap-1">
+              <div class="flex items-center">
+                <span>{{ column.label }}</span>
+                <HelpTooltip :content="t('admin.accounts.usageWindowsHint')" width-class="w-72" />
+              </div>
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  data-testid="usage-sort-5h"
+                  class="inline-flex items-center gap-0.5 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-gray-600 transition-colors hover:border-primary-300 hover:text-primary-600 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300 dark:hover:border-primary-600 dark:hover:text-primary-400"
+                  :class="{ 'border-primary-400 text-primary-600 dark:border-primary-600 dark:text-primary-400': sortState.sort_by === 'usage_5h' }"
+                  :aria-pressed="sortState.sort_by === 'usage_5h'"
+                  :title="usageSortTitle('usage_5h')"
+                  @click.stop="handleUsageSort('usage_5h')"
+                >
+                  {{ t('admin.accounts.usageSort5h') }}
+                  <span aria-hidden="true">{{ usageSortArrow('usage_5h') }}</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="usage-sort-7d"
+                  class="inline-flex items-center gap-0.5 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-gray-600 transition-colors hover:border-primary-300 hover:text-primary-600 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300 dark:hover:border-primary-600 dark:hover:text-primary-400"
+                  :class="{ 'border-primary-400 text-primary-600 dark:border-primary-600 dark:text-primary-400': sortState.sort_by === 'usage_7d' }"
+                  :aria-pressed="sortState.sort_by === 'usage_7d'"
+                  :title="usageSortTitle('usage_7d')"
+                  @click.stop="handleUsageSort('usage_7d')"
+                >
+                  {{ t('admin.accounts.usageSort7d') }}
+                  <span aria-hidden="true">{{ usageSortArrow('usage_7d') }}</span>
+                </button>
+              </div>
             </div>
           </template>
           <template #cell-usage="{ row }">
@@ -318,6 +360,7 @@
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :manual-refresh-token="usageManualRefreshToken"
+              :auto-refresh-token="usageAutoRefreshToken"
               :batched-usage="usageBatchByAccountId[String(row.id)] ?? null"
               :batched-usage-error="usageBatchErrorByAccountId[String(row.id)] ?? null"
               :batched-usage-loading="usageBatchLoadingByAccountId[String(row.id)] === true"
@@ -655,6 +698,8 @@ const ACCOUNT_SORTABLE_KEYS = new Set([
   'priority',
   'rate_multiplier',
   'upstream_billing_rate',
+  'usage_5h',
+  'usage_7d',
   'last_used_at',
   'created_at',
   'expires_at'
@@ -696,6 +741,9 @@ const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
 const pendingTodayStatsRefresh = ref(false)
 const usageManualRefreshToken = ref(0)
+const USAGE_AUTO_REFRESH_INTERVAL_SECONDS = 30
+const usageAutoRefreshToken = ref(0)
+const usageAutoRefreshCountdown = ref(USAGE_AUTO_REFRESH_INTERVAL_SECONDS)
 
 const desktopViewportQuery = '(min-width: 768px)'
 const isDesktopViewport = ref(
@@ -1219,12 +1267,38 @@ const handleSort = (key: string, order: AccountSortOrder) => {
   const requestParams = params as any
   requestParams.sort_by = key
   requestParams.sort_order = order
+  try {
+    localStorage.setItem(ACCOUNT_SORT_STORAGE_KEY, JSON.stringify({ key, order }))
+  } catch {
+    // Storage can be unavailable in hardened/private browser contexts.
+  }
   syncAccountListDerivedParams()
   pagination.page = 1
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
   load()
+}
+
+type UsageSortKey = 'usage_5h' | 'usage_7d'
+
+const handleUsageSort = (key: UsageSortKey) => {
+  const nextOrder: AccountSortOrder = sortState.sort_by === key && sortState.sort_order === 'desc'
+    ? 'asc'
+    : 'desc'
+  handleSort(key, nextOrder)
+}
+
+const usageSortArrow = (key: UsageSortKey) => {
+  if (sortState.sort_by !== key) return '↕'
+  return sortState.sort_order === 'desc' ? '↓' : '↑'
+}
+
+const usageSortTitle = (key: UsageSortKey) => {
+  const nextOrder = sortState.sort_by === key && sortState.sort_order === 'desc' ? 'asc' : 'desc'
+  return t(nextOrder === 'desc'
+    ? 'admin.accounts.usageSortHighToLow'
+    : 'admin.accounts.usageSortLowToHigh')
 }
 
 watch(loading, (isLoading, wasLoading) => {
@@ -1254,6 +1328,19 @@ watch(accounts, (rows) => {
     Object.entries(usageBatchRequestTokenByAccountId.value).filter(([key]) => visibleIDs.has(key))
   )
 })
+
+watch(
+  () => accounts.value
+    .filter((account) => account.platform === 'openai' && account.type === 'oauth')
+    .map((account) => account.id)
+    .join(','),
+  (visibleOpenAIAccountIDs, previousIDs) => {
+    if (!visibleOpenAIAccountIDs || visibleOpenAIAccountIDs === previousIDs) return
+    usageAutoRefreshToken.value += 1
+    usageAutoRefreshCountdown.value = USAGE_AUTO_REFRESH_INTERVAL_SECONDS
+  },
+  { flush: 'post' }
+)
 
 watch(upstreamBillingNow, () => {
   if (sortState.sort_by !== 'upstream_billing_rate' || loading.value) return
@@ -1477,6 +1564,25 @@ const { pause: pauseAutoRefresh, resume: resumeAutoRefresh } = useIntervalFn(
     }
 
     autoRefreshCountdown.value -= 1
+  },
+  1000,
+  { immediate: false }
+)
+
+const triggerUsageAutoRefresh = () => {
+  if (document.hidden) return
+  usageAutoRefreshToken.value += 1
+  usageAutoRefreshCountdown.value = USAGE_AUTO_REFRESH_INTERVAL_SECONDS
+}
+
+const { pause: pauseUsageAutoRefresh, resume: resumeUsageAutoRefresh } = useIntervalFn(
+  () => {
+    if (document.hidden) return
+    if (usageAutoRefreshCountdown.value <= 1) {
+      triggerUsageAutoRefresh()
+      return
+    }
+    usageAutoRefreshCountdown.value -= 1
   },
   1000,
   { immediate: false }
@@ -2471,9 +2577,11 @@ onMounted(async () => {
   } else {
     pauseAutoRefresh()
   }
+  resumeUsageAutoRefresh()
 })
 
 onUnmounted(() => {
+  pauseUsageAutoRefresh()
   if (usageBatchFlushTimer !== null) {
     clearTimeout(usageBatchFlushTimer)
     usageBatchFlushTimer = null
