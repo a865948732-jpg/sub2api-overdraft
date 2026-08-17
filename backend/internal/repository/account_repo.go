@@ -1070,7 +1070,14 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 		}
 		return []func(*entsql.Selector){func(s *entsql.Selector) {
 			extra := s.C(dbaccount.FieldExtra)
-			expression := accountUsageSortExpression(extra, sortBy)
+			expression := accountUsageSortExpression(
+				extra,
+				s.C(dbaccount.FieldID),
+				s.C(dbaccount.FieldPlatform),
+				s.C(dbaccount.FieldSessionWindowStart),
+				s.C(dbaccount.FieldSessionWindowEnd),
+				sortBy,
+			)
 			s.OrderExpr(entsql.Expr(expression + " " + direction + " NULLS LAST"))
 			s.OrderBy(entsql.Asc(s.C(dbaccount.FieldID)))
 		}}
@@ -1116,26 +1123,67 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 	return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(dbaccount.FieldID)}
 }
 
-func accountUsageSortExpression(extra, sortBy string) string {
-	var codexKey, passiveKey string
+func accountUsageSortExpression(extra, accountID, platform, sessionStart, sessionEnd, sortBy string) string {
+	var resetAtKey, resetAfterKey, interval string
 	switch sortBy {
 	case "usage_5h":
-		codexKey = "codex_5h_used_percent"
-		passiveKey = "session_window_utilization"
+		resetAtKey = "codex_5h_reset_at"
+		resetAfterKey = "codex_5h_reset_after_seconds"
+		interval = "5 hours"
 	case "usage_7d":
-		codexKey = "codex_7d_used_percent"
-		passiveKey = "passive_usage_7d_utilization"
+		resetAtKey = "codex_7d_reset_at"
+		resetAfterKey = "codex_7d_reset_after_seconds"
+		interval = "7 days"
 	default:
 		return ""
 	}
 
-	codexJSON := extra + " -> '" + codexKey + "'"
-	codexText := extra + " ->> '" + codexKey + "'"
-	passiveJSON := extra + " -> '" + passiveKey + "'"
-	passiveText := extra + " ->> '" + passiveKey + "'"
-	codexPercent := "(CASE WHEN jsonb_typeof(" + codexJSON + ") = 'number' THEN (" + codexText + ")::numeric END)"
-	passivePercent := "(CASE WHEN jsonb_typeof(" + passiveJSON + ") = 'number' THEN (" + passiveText + ")::numeric * 100 END)"
-	return "COALESCE(" + codexPercent + ", " + passivePercent + ")"
+	// UsageProgress uses reset_at - window length as the window start whenever
+	// the upstream reset snapshot is still in the future. For Anthropic's local
+	// session window, the persisted session_window_start/end pair has priority.
+	// This mirrors the start-time logic used by AccountUsageService so the sort
+	// key is the same token total rendered below each usage bar.
+	resetAt := accountUsageResetAtExpression(extra, resetAtKey, resetAfterKey)
+	windowStart := "(CASE"
+	if sortBy == "usage_5h" {
+		windowStart += " WHEN " + sessionStart + " IS NOT NULL AND " + sessionEnd + " IS NOT NULL AND " + sessionEnd + " > CURRENT_TIMESTAMP THEN " + sessionStart
+	}
+	windowStart += " WHEN " + resetAt + " IS NOT NULL AND " + resetAt + " > CURRENT_TIMESTAMP THEN " + resetAt + " - INTERVAL '" + interval + "'"
+	windowStart += " ELSE CASE WHEN " + platform + " = 'anthropic' THEN date_trunc('hour', CURRENT_TIMESTAMP) ELSE CURRENT_TIMESTAMP - INTERVAL '" + interval + "' END END)"
+
+	// Keep accounts with no usage rows distinguishable from accounts that have
+	// real requests but happen to total zero tokens. The former sort last via
+	// NULLS LAST; the latter remain a valid zero-value usage result.
+	return "(SELECT CASE WHEN COUNT(*) = 0 THEN NULL ELSE COALESCE(SUM(input_tokens::bigint + output_tokens::bigint + cache_creation_tokens::bigint + cache_read_tokens::bigint), 0) END " +
+		"FROM usage_logs WHERE account_id = " + accountID + " AND created_at >= " + windowStart + ")"
+}
+
+func accountUsageResetAtExpression(extra, resetAtKey, resetAfterKey string) string {
+	resetAtJSON := extra + " -> '" + resetAtKey + "'"
+	resetAtText := extra + " ->> '" + resetAtKey + "'"
+	updatedAtJSON := extra + " -> 'codex_usage_updated_at'"
+	updatedAtText := extra + " ->> 'codex_usage_updated_at'"
+	resetAfterJSON := extra + " -> '" + resetAfterKey + "'"
+	resetAfterText := extra + " ->> '" + resetAfterKey + "'"
+
+	// Probe snapshots are RFC3339 strings. Guard the cast so malformed imported
+	// extras cannot make the whole account list query fail.
+	timestampPattern := "'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'"
+	safeTimestamp := func(jsonExpr, textExpr string) string {
+		return "(CASE WHEN jsonb_typeof(" + jsonExpr + ") = 'string' AND (" + textExpr + ") ~ " + timestampPattern +
+			" THEN (" + textExpr + ")::timestamptz END)"
+	}
+	safeNumber := func(jsonExpr, textExpr string) string {
+		return "(CASE WHEN jsonb_typeof(" + jsonExpr + ") = 'number' THEN (" + textExpr + ")::numeric " +
+			"WHEN jsonb_typeof(" + jsonExpr + ") = 'string' AND (" + textExpr + ") ~ '^[+-]?([0-9]+([.][0-9]+)?|[.][0-9]+)$' " +
+			"THEN (" + textExpr + ")::numeric END)"
+	}
+
+	absolute := safeTimestamp(resetAtJSON, resetAtText)
+	resetAfter := safeNumber(resetAfterJSON, resetAfterText)
+	updatedAt := safeTimestamp(updatedAtJSON, updatedAtText)
+	fallback := "(CASE WHEN " + resetAfter + " > 0 THEN COALESCE(" + updatedAt + ", CURRENT_TIMESTAMP) + " + resetAfter + " * INTERVAL '1 second' END)"
+	return "COALESCE(" + absolute + ", " + fallback + ")"
 }
 
 func upstreamBillingRateSortExpression(extra string) string {

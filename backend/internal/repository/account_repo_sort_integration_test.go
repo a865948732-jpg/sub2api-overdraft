@@ -72,23 +72,43 @@ func (s *AccountRepoSuite) TestListWithFilters_SortByUpstreamBillingRateWithMiss
 }
 
 func (s *AccountRepoSuite) TestListWithFilters_SortByUsageWindowsAcrossPagesWithMissingLast() {
-	makeAccount := func(name string, usage5h, usage7d any) {
-		extra := map[string]any{}
-		if usage5h != nil {
-			extra["codex_5h_used_percent"] = usage5h
-		}
-		if usage7d != nil {
-			extra["codex_7d_used_percent"] = usage7d
-		}
-		mustCreateAccount(s.T(), s.client, &service.Account{
-			Name: name, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: extra,
+	accounts := map[string]*service.Account{
+		"low-5h-high-7d": mustCreateAccount(s.T(), s.client, &service.Account{
+			Name: "low-5h-high-7d", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		}),
+		"high-5h-low-7d": mustCreateAccount(s.T(), s.client, &service.Account{
+			Name: "high-5h-low-7d", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		}),
+		"zero-usage": mustCreateAccount(s.T(), s.client, &service.Account{
+			Name: "zero-usage", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		}),
+		"missing-usage": mustCreateAccount(s.T(), s.client, &service.Account{
+			Name: "missing-usage", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		}),
+	}
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "account-usage-sort@example.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-account-usage-sort", Name: "usage-sort"})
+	usageRepo := newUsageLogRepositoryWithSQL(s.client, s.repo.sql)
+	now := time.Now().UTC()
+	createLog := func(account *service.Account, tokens int, at time.Time, requestID string) {
+		_, err := usageRepo.Create(s.ctx, &service.UsageLog{
+			UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
+			RequestID: requestID, Model: "gpt-5.4",
+			InputTokens: tokens, CreatedAt: at,
 		})
+		s.Require().NoError(err)
 	}
 
-	makeAccount("low-5h-high-7d", 10.0, 90.0)
-	makeAccount("high-5h-low-7d", 80.0, 20.0)
-	makeAccount("zero-usage", 0.0, 0.0)
-	makeAccount("missing-usage", nil, nil)
+	// The sort key is the rendered window token total, not the upstream
+	// percentage snapshot. Both rows are recent enough for 5h and 7d.
+	createLog(accounts["low-5h-high-7d"], 10_000_000, now.Add(-1*time.Hour), "usage-sort-low-5h")
+	createLog(accounts["low-5h-high-7d"], 80_000_000, now.Add(-6*time.Hour), "usage-sort-high-7d")
+	createLog(accounts["high-5h-low-7d"], 50_000_000, now.Add(-1*time.Hour), "usage-sort-high-5h")
+	createLog(accounts["high-5h-low-7d"], 5_000_000, now.Add(-6*time.Hour), "usage-sort-low-7d")
+
+	// A real row with zero tokens is distinct from an account with no rows; the
+	// latter must remain at the end of either sort direction.
+	createLog(accounts["zero-usage"], 0, now.Add(-1*time.Hour), "usage-sort-zero")
 
 	for _, tc := range []struct {
 		sortBy string

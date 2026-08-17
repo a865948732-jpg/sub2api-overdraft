@@ -16,25 +16,35 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 )
 
-func TestAccountUsageSortExpressionNormalizesCodexAndPassivePercentages(t *testing.T) {
+func TestAccountUsageSortExpressionUsesWindowTokenTotals(t *testing.T) {
 	for _, tc := range []struct {
-		sortBy     string
-		codexKey   string
-		passiveKey string
+		sortBy        string
+		resetAtKey    string
+		resetAfterKey string
+		interval      string
 	}{
-		{sortBy: "usage_5h", codexKey: "codex_5h_used_percent", passiveKey: "session_window_utilization"},
-		{sortBy: "usage_7d", codexKey: "codex_7d_used_percent", passiveKey: "passive_usage_7d_utilization"},
+		{sortBy: "usage_5h", resetAtKey: "codex_5h_reset_at", resetAfterKey: "codex_5h_reset_after_seconds", interval: "5 hours"},
+		{sortBy: "usage_7d", resetAtKey: "codex_7d_reset_at", resetAfterKey: "codex_7d_reset_after_seconds", interval: "7 days"},
 	} {
-		expression := accountUsageSortExpression("accounts.extra", tc.sortBy)
-		require.Contains(t, expression, "COALESCE")
-		require.Contains(t, expression, tc.codexKey)
-		require.Contains(t, expression, tc.passiveKey)
-		require.Contains(t, expression, "jsonb_typeof")
-		require.Contains(t, expression, "::numeric")
-		require.Contains(t, expression, "* 100")
+		expression := accountUsageSortExpression(
+			"accounts.extra",
+			"accounts.id",
+			"accounts.platform",
+			"accounts.session_window_start",
+			"accounts.session_window_end",
+			tc.sortBy,
+		)
+		require.Contains(t, expression, "FROM usage_logs")
+		require.Contains(t, expression, "input_tokens::bigint + output_tokens::bigint + cache_creation_tokens::bigint + cache_read_tokens::bigint")
+		require.Contains(t, expression, tc.resetAtKey)
+		require.Contains(t, expression, tc.resetAfterKey)
+		require.Contains(t, expression, "INTERVAL '"+tc.interval+"'")
+		require.Contains(t, expression, "COUNT(*) = 0 THEN NULL")
+		require.Contains(t, expression, "date_trunc('hour', CURRENT_TIMESTAMP)")
+		require.NotContains(t, expression, "used_percent")
 	}
 
-	require.Empty(t, accountUsageSortExpression("accounts.extra", "name"))
+	require.Empty(t, accountUsageSortExpression("accounts.extra", "accounts.id", "accounts.platform", "accounts.session_window_start", "accounts.session_window_end", "name"))
 }
 
 func TestAccountUsageSortIsAppliedBeforePaginationWithMissingValuesLast(t *testing.T) {
@@ -44,8 +54,8 @@ func TestAccountUsageSortIsAppliedBeforePaginationWithMissingValuesLast(t *testi
 		wantKey  string
 		wantSort string
 	}{
-		{sortBy: "usage_5h", order: "desc", wantKey: "codex_5h_used_percent", wantSort: "DESC NULLS LAST"},
-		{sortBy: "usage_7d", order: "asc", wantKey: "codex_7d_used_percent", wantSort: "ASC NULLS LAST"},
+		{sortBy: "usage_5h", order: "desc", wantKey: "FROM usage_logs", wantSort: "DESC NULLS LAST"},
+		{sortBy: "usage_7d", order: "asc", wantKey: "FROM usage_logs", wantSort: "ASC NULLS LAST"},
 	} {
 		var capturedSQL string
 		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(captureEntQueryMatcher{actual: &capturedSQL}))

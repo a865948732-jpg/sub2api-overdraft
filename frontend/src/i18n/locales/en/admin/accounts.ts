@@ -12,10 +12,10 @@ export default {
       autoRefreshCountdown: 'Auto refresh: {seconds}s',
       usageAutoRefreshCountdown: 'Usage refresh: {seconds}s',
       usageAutoRefreshTitle: 'Refresh usage and reset-credit counts for OpenAI accounts on this page now (automatically every 30 seconds)',
-      usageSort5h: '5h sort',
-      usageSort7d: '7d sort',
-      usageSortHighToLow: 'Sort usage from high to low',
-      usageSortLowToHigh: 'Sort usage from low to high',
+      usageSort5h: '5h quota sort',
+      usageSort7d: '7d quota sort',
+      usageSortHighToLow: 'Sort window quota (tokens) high to low',
+      usageSortLowToHigh: 'Sort window quota (tokens) low to high',
       listPendingSyncHint: 'List changes are pending sync. Click sync to load latest rows.',
       listPendingSyncAction: 'Sync now',
       syncFromCrs: 'Sync from CRS',
@@ -185,7 +185,7 @@ export default {
         ungrouped: 'Ungrouped',
         hint: 'Displayed as "group / base score / sticky bonus". The base score is computed within the current filtered candidate set and includes priority, load, queue depth, error rate, first-token latency, reset window, quota headroom, billing rate, and related factors. The sticky bonus applies only when sticky weighting is enabled for previous_response_id or session_hash. Higher scores are preferred.'
       },
-      usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
+      usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api. The buttons below sort by each window\'s total Token usage; accounts without usage records are placed last.',
       ollamaCloud: {
         title: 'Ollama Cloud usage',
         sessionSecurityHint: 'The browser session is encrypted at rest and sent only to the fixed official settings URL.',
