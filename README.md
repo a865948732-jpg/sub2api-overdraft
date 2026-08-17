@@ -12,6 +12,8 @@
 
 **AI API gateway with Codex 5h / 7d quota overdraft probing, tracking, and recovery**
 
+**Version: v0.1.177 · Codex quota overdraft edition**
+
 English | [中文](README_CN.md) | [日本語](README_JA.md)
 
 </div>
@@ -32,7 +34,7 @@ See the **[Chinese deployment and operations guide](CODEX_OVERDRAFT_DEPLOYMENT_C
 Quick start:
 
 ```bash
-git clone https://github.com/DeanZFC/sub2api-overdraft.git
+git clone https://github.com/a865948732-jpg/sub2api-overdraft.git
 cd sub2api-overdraft/deploy
 cp .env.example .env
 # Set POSTGRES_PASSWORD, JWT_SECRET, and TOTP_ENCRYPTION_KEY in .env

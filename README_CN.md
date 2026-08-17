@@ -12,6 +12,8 @@
 
 **带 Codex 5h / 7d 额度透支探测、统计与恢复的 AI API 网关**
 
+**版本：v0.1.177（Codex 额度透支功能版）**
+
 [English](README.md) | 中文 | [日本語](README_JA.md)
 
 </div>
@@ -37,7 +39,7 @@
 最短部署流程：
 
 ```bash
-git clone https://github.com/DeanZFC/sub2api-overdraft.git
+git clone https://github.com/a865948732-jpg/sub2api-overdraft.git
 cd sub2api-overdraft/deploy
 cp .env.example .env
 chmod 600 .env

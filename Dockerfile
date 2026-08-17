@@ -110,7 +110,7 @@ FROM ${ALPINE_IMAGE}
 # Labels
 LABEL maintainer="DeanZFC <github.com/DeanZFC>"
 LABEL description="sub2api-overdraft - Sub2API fork with Codex quota overdraft support"
-LABEL org.opencontainers.image.source="https://github.com/DeanZFC/sub2api-overdraft"
+LABEL org.opencontainers.image.source="https://github.com/a865948732-jpg/sub2api-overdraft"
 LABEL org.opencontainers.image.licenses="LGPL-3.0-or-later"
 
 # Install runtime dependencies

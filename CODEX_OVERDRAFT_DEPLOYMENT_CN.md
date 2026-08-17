@@ -44,12 +44,12 @@
 ```bash
 sudo mkdir -p /opt
 cd /opt
-sudo git clone https://github.com/DeanZFC/sub2api-overdraft.git
+sudo git clone https://github.com/a865948732-jpg/sub2api-overdraft.git
 sudo chown -R "$(id -u):$(id -g)" /opt/sub2api-overdraft
 cd /opt/sub2api-overdraft/deploy
 ```
 
-仓库默认分支是 `codex-overdraft`。确认当前分支：
+公开仓库的发布分支是 `main`，其中包含 v0.1.177 透支功能。确认当前分支：
 
 ```bash
 git branch --show-current
@@ -58,7 +58,7 @@ git branch --show-current
 预期输出：
 
 ```text
-codex-overdraft
+main
 ```
 
 ### 2. 创建环境配置
@@ -192,17 +192,17 @@ git remote -v
 有未提交代码时先保存：
 
 ```bash
-git stash push -u -m "server changes before codex-overdraft switch"
+git stash push -u -m "server changes before main switch"
 ```
 
 然后连接本 Fork 并切换到公开分支：
 
 ```bash
-git remote set-url origin https://github.com/DeanZFC/sub2api-overdraft.git
+git remote set-url origin https://github.com/a865948732-jpg/sub2api-overdraft.git
 git fetch origin
-git switch codex-overdraft 2>/dev/null || \
-  git switch -c codex-overdraft --track origin/codex-overdraft
-git pull --ff-only origin codex-overdraft
+git switch main 2>/dev/null || \
+  git switch -c main --track origin/main
+git pull --ff-only origin main
 ```
 
 如果 Git 报 `detected dubious ownership`，确认目录确实是本项目后再执行：
@@ -372,8 +372,8 @@ deploy/redis_data/
 ```bash
 cd /opt/sub2api-overdraft
 git status --short
-git switch codex-overdraft
-git pull --ff-only origin codex-overdraft
+git switch main
+git pull --ff-only origin main
 
 cd deploy
 docker compose \
@@ -386,10 +386,11 @@ docker compose \
 
 ## 合并 Sub2API 官方更新
 
-本仓库保留两个分支角色：
+本公开仓库当前发布分支为：
 
-- `main`：尽量跟随官方 `Wei-Shaw/sub2api`，作为上游基线。
-- `codex-overdraft`：本项目默认分支，包含透支功能和公开文档。
+- `main`：v0.1.177 透支功能版，包含透支实现、部署文件和公开文档。
+
+上游 `Wei-Shaw/sub2api` 仅作为代码基线；不要把官方镜像或官方安装脚本当作本 Fork 的透支版本。
 
 维护者可这样合并官方更新：
 
@@ -397,7 +398,7 @@ docker compose \
 git remote get-url upstream >/dev/null 2>&1 || \
   git remote add upstream https://github.com/Wei-Shaw/sub2api.git
 git fetch upstream
-git switch codex-overdraft
+git switch main
 git merge upstream/main
 ```
 
@@ -420,7 +421,7 @@ pnpm exec vitest run \
 
 cd ..
 git diff --check
-git push origin codex-overdraft
+git push origin main
 ```
 
 更详细的实现文件和升级核对清单见 [CODEX_QUOTA_OVERDRAFT_CUSTOMIZATION.md](CODEX_QUOTA_OVERDRAFT_CUSTOMIZATION.md)。
@@ -481,7 +482,7 @@ docker compose \
 jsonb_build_object($1::text, $2::jsonb)
 ```
 
-拉取最新 `codex-overdraft` 分支并使用 `--build --force-recreate` 重建应用容器。
+拉取最新 `main` 分支并使用 `--build --force-recreate` 重建应用容器。
 
 ### API 返回 503 `no available accounts`
 

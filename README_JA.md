@@ -12,6 +12,8 @@
 
 **Codex 5h / 7d クォータのオーバードラフト検証・集計・回復機能を追加した AI API ゲートウェイ**
 
+**バージョン：v0.1.177（Codex クォータ・オーバードラフト版）**
+
 [English](README.md) | [中文](README_CN.md) | 日本語
 
 </div>
@@ -29,7 +31,7 @@
 ソースビルド、既存環境からの移行、検証、更新、ロールバック、Nginx、トラブルシューティングについては、**[中国語のデプロイ・運用ガイド](CODEX_OVERDRAFT_DEPLOYMENT_CN.md)** を参照してください。
 
 ```bash
-git clone https://github.com/DeanZFC/sub2api-overdraft.git
+git clone https://github.com/a865948732-jpg/sub2api-overdraft.git
 cd sub2api-overdraft/deploy
 cp .env.example .env
 # .env に POSTGRES_PASSWORD、JWT_SECRET、TOTP_ENCRYPTION_KEY を設定
