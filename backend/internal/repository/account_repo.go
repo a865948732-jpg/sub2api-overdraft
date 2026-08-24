@@ -56,6 +56,7 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_secondary_",
 	"codex_5h_",
 	"codex_7d_",
+	"codex_quota_overdraft_",
 	"codex_reset_credit_",
 	"passive_usage_",
 	"upstream_billing_probe",
@@ -1095,6 +1096,25 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 			s.OrderBy(tieOrder(s.C(dbaccount.FieldID)))
 		}}
 	}
+	if sortBy == "usage_5h" || sortBy == "usage_7d" {
+		direction := "ASC"
+		if sortOrder == pagination.SortOrderDesc {
+			direction = "DESC"
+		}
+		return []func(*entsql.Selector){func(s *entsql.Selector) {
+			extra := s.C(dbaccount.FieldExtra)
+			expression := accountUsageSortExpression(
+				extra,
+				s.C(dbaccount.FieldID),
+				s.C(dbaccount.FieldPlatform),
+				s.C(dbaccount.FieldSessionWindowStart),
+				s.C(dbaccount.FieldSessionWindowEnd),
+				sortBy,
+			)
+			s.OrderExpr(entsql.Expr(expression + " " + direction + " NULLS LAST"))
+			s.OrderBy(entsql.Asc(s.C(dbaccount.FieldID)))
+		}}
+	}
 
 	field := dbaccount.FieldName
 	defaultOrder := true
@@ -1134,6 +1154,69 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 		return []func(*entsql.Selector){dbent.Asc(dbaccount.FieldName), dbent.Asc(dbaccount.FieldID)}
 	}
 	return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(dbaccount.FieldID)}
+}
+
+func accountUsageSortExpression(extra, accountID, platform, sessionStart, sessionEnd, sortBy string) string {
+	var resetAtKey, resetAfterKey, interval string
+	switch sortBy {
+	case "usage_5h":
+		resetAtKey = "codex_5h_reset_at"
+		resetAfterKey = "codex_5h_reset_after_seconds"
+		interval = "5 hours"
+	case "usage_7d":
+		resetAtKey = "codex_7d_reset_at"
+		resetAfterKey = "codex_7d_reset_after_seconds"
+		interval = "7 days"
+	default:
+		return ""
+	}
+
+	// UsageProgress uses reset_at - window length as the window start whenever
+	// the upstream reset snapshot is still in the future. For Anthropic's local
+	// session window, the persisted session_window_start/end pair has priority.
+	// This mirrors the start-time logic used by AccountUsageService so the sort
+	// key is the same token total rendered below each usage bar.
+	resetAt := accountUsageResetAtExpression(extra, resetAtKey, resetAfterKey)
+	windowStart := "(CASE"
+	if sortBy == "usage_5h" {
+		windowStart += " WHEN " + sessionStart + " IS NOT NULL AND " + sessionEnd + " IS NOT NULL AND " + sessionEnd + " > CURRENT_TIMESTAMP THEN " + sessionStart
+	}
+	windowStart += " WHEN " + resetAt + " IS NOT NULL AND " + resetAt + " > CURRENT_TIMESTAMP THEN " + resetAt + " - INTERVAL '" + interval + "'"
+	windowStart += " ELSE CASE WHEN " + platform + " = 'anthropic' THEN date_trunc('hour', CURRENT_TIMESTAMP) ELSE CURRENT_TIMESTAMP - INTERVAL '" + interval + "' END END)"
+
+	// Keep accounts with no usage rows distinguishable from accounts that have
+	// real requests but happen to total zero tokens. The former sort last via
+	// NULLS LAST; the latter remain a valid zero-value usage result.
+	return "(SELECT CASE WHEN COUNT(*) = 0 THEN NULL ELSE COALESCE(SUM(input_tokens::bigint + output_tokens::bigint + cache_creation_tokens::bigint + cache_read_tokens::bigint), 0) END " +
+		"FROM usage_logs WHERE account_id = " + accountID + " AND created_at >= " + windowStart + ")"
+}
+
+func accountUsageResetAtExpression(extra, resetAtKey, resetAfterKey string) string {
+	resetAtJSON := extra + " -> '" + resetAtKey + "'"
+	resetAtText := extra + " ->> '" + resetAtKey + "'"
+	updatedAtJSON := extra + " -> 'codex_usage_updated_at'"
+	updatedAtText := extra + " ->> 'codex_usage_updated_at'"
+	resetAfterJSON := extra + " -> '" + resetAfterKey + "'"
+	resetAfterText := extra + " ->> '" + resetAfterKey + "'"
+
+	// Probe snapshots are RFC3339 strings. Guard the cast so malformed imported
+	// extras cannot make the whole account list query fail.
+	timestampPattern := "'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'"
+	safeTimestamp := func(jsonExpr, textExpr string) string {
+		return "(CASE WHEN jsonb_typeof(" + jsonExpr + ") = 'string' AND (" + textExpr + ") ~ " + timestampPattern +
+			" THEN (" + textExpr + ")::timestamptz END)"
+	}
+	safeNumber := func(jsonExpr, textExpr string) string {
+		return "(CASE WHEN jsonb_typeof(" + jsonExpr + ") = 'number' THEN (" + textExpr + ")::numeric " +
+			"WHEN jsonb_typeof(" + jsonExpr + ") = 'string' AND (" + textExpr + ") ~ '^[+-]?([0-9]+([.][0-9]+)?|[.][0-9]+)$' " +
+			"THEN (" + textExpr + ")::numeric END)"
+	}
+
+	absolute := safeTimestamp(resetAtJSON, resetAtText)
+	resetAfter := safeNumber(resetAfterJSON, resetAfterText)
+	updatedAt := safeTimestamp(updatedAtJSON, updatedAtText)
+	fallback := "(CASE WHEN " + resetAfter + " > 0 THEN COALESCE(" + updatedAt + ", CURRENT_TIMESTAMP) + " + resetAfter + " * INTERVAL '1 second' END)"
+	return "COALESCE(" + absolute + ", " + fallback + ")"
 }
 
 func upstreamBillingRateSortExpression(extra string) string {
@@ -1865,7 +1948,7 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 }
 
 func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Account, error) {
-	accounts, err := r.schedulableAccountsQuery(time.Now()).All(ctx)
+	accounts, err := r.schedulableAccountsQuery(ctx, time.Now()).All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1873,7 +1956,7 @@ func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Acco
 }
 
 func (r *accountRepository) ListSchedulableAccountLoads(ctx context.Context) ([]service.AccountWithConcurrency, error) {
-	accounts, err := r.schedulableAccountsQuery(time.Now()).
+	accounts, err := r.schedulableAccountsQuery(ctx, time.Now()).
 		Select(
 			dbaccount.FieldID,
 			dbaccount.FieldConcurrency,
@@ -1899,12 +1982,12 @@ func (r *accountRepository) ListSchedulableAccountLoads(ctx context.Context) ([]
 	return loads, nil
 }
 
-func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.AccountQuery {
+func (r *accountRepository) schedulableAccountsQuery(ctx context.Context, now time.Time) *dbent.AccountQuery {
 	return r.client.Account.Query().
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
-			tempUnschedulablePredicate(),
+			tempUnschedulablePredicate(ctx),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
@@ -2010,7 +2093,7 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
-			tempUnschedulablePredicate(),
+			tempUnschedulablePredicate(ctx),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
@@ -2044,7 +2127,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
-			tempUnschedulablePredicate(),
+			tempUnschedulablePredicate(ctx),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
@@ -2065,7 +2148,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
-			tempUnschedulablePredicate(),
+			tempUnschedulablePredicate(ctx),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
@@ -2089,7 +2172,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
-			tempUnschedulablePredicate(),
+			tempUnschedulablePredicate(ctx),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
@@ -2629,6 +2712,49 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	return nil
 }
 
+// ClaimCodexQuotaOverdraftProbe atomically reserves one quota cycle. This
+// prevents duplicate five-request probe plans across multiple sub2api replicas.
+func (r *accountRepository) ClaimCodexQuotaOverdraftProbe(
+	ctx context.Context,
+	id int64,
+	state *service.CodexQuotaOverdraftProbeState,
+) (bool, error) {
+	if state == nil || strings.TrimSpace(state.CycleKey) == "" {
+		return false, nil
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return false, err
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET extra = COALESCE(extra, '{}'::jsonb) || jsonb_build_object($1::text, $2::jsonb),
+			updated_at = NOW()
+		WHERE id = $3
+			AND deleted_at IS NULL
+			AND (
+				COALESCE(extra #>> '{codex_quota_overdraft_probe,cycle_key}', '') <> $4
+				OR (
+					extra #>> '{codex_quota_overdraft_probe,status}' = 'inconclusive'
+					AND COALESCE(NULLIF(extra #>> '{codex_quota_overdraft_probe,retry_at}', '')::timestamptz, '1970-01-01'::timestamptz) <= NOW()
+				)
+				OR (
+					extra #>> '{codex_quota_overdraft_probe,status}' = 'pending'
+					AND COALESCE(NULLIF(extra #>> '{codex_quota_overdraft_probe,started_at}', '')::timestamptz, '1970-01-01'::timestamptz) <= NOW() - INTERVAL '2 minutes'
+				)
+			)
+	`, service.CodexQuotaOverdraftProbeExtraKey, string(payload), id, state.CycleKey)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return true, nil
+}
+
 // UpdateUpstreamBillingProbeSnapshot stores a probe result only while the
 // network identity used by that probe is still current.
 func (r *accountRepository) UpdateUpstreamBillingProbeSnapshot(
@@ -3070,7 +3196,7 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		if !opts.ignoreTransientState {
 			now := time.Now()
 			preds = append(preds,
-				tempUnschedulablePredicate(),
+				tempUnschedulablePredicate(ctx),
 				notExpiredPredicate(now),
 				dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 				dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
@@ -3175,13 +3301,23 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	return outAccounts, nil
 }
 
-func tempUnschedulablePredicate() dbpredicate.Account {
+func tempUnschedulablePredicate(ctx context.Context) dbpredicate.Account {
 	return dbpredicate.Account(func(s *entsql.Selector) {
 		col := s.C("temp_unschedulable_until")
-		s.Where(entsql.Or(
+		predicates := []*entsql.Predicate{
 			entsql.IsNull(col),
 			entsql.LTE(col, entsql.Expr("NOW()")),
-		))
+		}
+		if service.CodexQuotaOverdraftSchedulingEnabled(ctx) {
+			reasonCol := s.C("temp_unschedulable_reason")
+			predicates = append(predicates, entsql.And(
+				entsql.EQ(s.C("platform"), service.PlatformOpenAI),
+				entsql.EQ(s.C("type"), service.AccountTypeOAuth),
+				entsql.IsNull(s.C("parent_account_id")),
+				entsql.Contains(reasonCol, `"source":"`+service.AccountSchedulingThresholdReasonSource+`"`),
+			))
+		}
+		s.Where(entsql.Or(predicates...))
 	})
 }
 

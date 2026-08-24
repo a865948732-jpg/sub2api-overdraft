@@ -119,12 +119,32 @@
     <!-- OpenAI OAuth accounts: single source from /usage API -->
     <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
+        <div
+          v-if="codexOverdraftStatus"
+          class="flex items-center gap-1.5 text-[9px]"
+          :class="codexOverdraftStatus.textClass"
+          :title="codexOverdraftStatus.title"
+        >
+          <span
+            class="rounded px-1.5 py-0.5 font-medium"
+            :class="codexOverdraftStatus.badgeClass"
+          >
+            {{ codexOverdraftStatus.label }}
+          </span>
+          <span v-if="codexOverdraftStatus.detail" class="text-gray-500 dark:text-gray-400">
+            {{ codexOverdraftStatus.detail }}
+          </span>
+        </div>
         <UsageProgressBar
           v-if="usageInfo?.five_hour"
           label="5h"
           :utilization="usageInfo.five_hour.utilization"
           :resets-at="usageInfo.five_hour.resets_at"
           :window-stats="usageInfo.five_hour.window_stats"
+          :overdraft-active="usageInfo.five_hour.overdraft_active"
+          :overdraft-stats="usageInfo.five_hour.overdraft_stats"
+          :overdraft-started-at="usageInfo.five_hour.overdraft_started_at"
+          :overdraft-recover-at="usageInfo.five_hour.overdraft_recover_at"
           :show-now-when-idle="true"
           color="indigo"
         />
@@ -134,6 +154,10 @@
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
           :window-stats="usageInfo.seven_day.window_stats"
+          :overdraft-active="usageInfo.seven_day.overdraft_active"
+          :overdraft-stats="usageInfo.seven_day.overdraft_stats"
+          :overdraft-started-at="usageInfo.seven_day.overdraft_started_at"
+          :overdraft-recover-at="usageInfo.seven_day.overdraft_recover_at"
           :show-now-when-idle="true"
           color="emerald"
         />
@@ -142,7 +166,11 @@
           refresh button is rendered via the pre-actions slot so the user sees a
           single row of related buttons instead of two stacked rows.
         -->
-        <OpenAIQuotaResetCell :account="account" @account-updated="handleQuotaResetAccountUpdated">
+        <OpenAIQuotaResetCell
+          :account="account"
+          :auto-refresh-token="autoRefreshToken"
+          @account-updated="handleQuotaResetAccountUpdated"
+        >
           <template #pre-actions>
             <button
               type="button"
@@ -186,6 +214,7 @@
         <!-- Always allow on-demand upstream quota query, even before local data exists. -->
         <OpenAIQuotaResetCell
           :account="account"
+          :auto-refresh-token="autoRefreshToken"
           class="mt-1"
           @account-updated="handleQuotaResetAccountUpdated"
         />
@@ -665,6 +694,7 @@ const props = withDefaults(
     todayStats?: WindowStats | null
     todayStatsLoading?: boolean
     manualRefreshToken?: number
+    autoRefreshToken?: number
     batchedUsage?: AccountUsageInfo | null
     batchedUsageError?: string | null
     batchedUsageLoading?: boolean
@@ -674,6 +704,7 @@ const props = withDefaults(
     todayStats: null,
     todayStatsLoading: false,
     manualRefreshToken: 0,
+    autoRefreshToken: 0,
     batchedUsage: null,
     batchedUsageError: null,
     batchedUsageLoading: false,
@@ -775,7 +806,70 @@ const geminiUsageAvailable = computed(() => {
 
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
-  return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+  return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day || !!usageInfo.value?.codex_quota_overdraft
+})
+
+const codexOverdraftStatus = computed(() => {
+  const probe = usageInfo.value?.codex_quota_overdraft
+  if (!probe) return null
+
+  const attempts = Math.max(0, probe.attempts || 0)
+  const limit = Math.max(1, probe.limit || 5)
+  const windowLabel = probe.quota_window === 'multiple' ? '5h / 7d' : probe.quota_window
+  const testedAt = probe.tested_at ? new Date(probe.tested_at).toLocaleString() : ''
+  const recoverAt = probe.recover_at ? new Date(probe.recover_at).toLocaleString() : ''
+  const retryAt = probe.retry_at ? new Date(probe.retry_at).toLocaleString() : ''
+  const titleParts = [windowLabel]
+  if (probe.model) titleParts.push(probe.model)
+  if (probe.reason_code) titleParts.push(probe.reason_code)
+  if (testedAt) titleParts.push(`${t('usage.overdraftTestedAt')}: ${testedAt}`)
+  if (recoverAt) titleParts.push(`${t('usage.overdraftRecoverAt')}: ${recoverAt}`)
+  if (retryAt) titleParts.push(`${t('usage.overdraftRetryAt')}: ${retryAt}`)
+
+  switch (probe.status) {
+    case 'pending':
+      return {
+        label: t('usage.overdraftProbePending'),
+        detail: `${attempts}/${limit} · ${windowLabel}`,
+        title: titleParts.join(' · '),
+        textClass: 'text-amber-600 dark:text-amber-400',
+        badgeClass: 'bg-amber-50 dark:bg-amber-950/40'
+      }
+    case 'passed':
+      return {
+        label: t('usage.overdraftActive'),
+        detail: `${attempts}/${limit} · ${windowLabel}`,
+        title: titleParts.join(' · '),
+        textClass: 'text-red-600 dark:text-red-400',
+        badgeClass: 'bg-red-50 dark:bg-red-950/40'
+      }
+    case 'failed':
+      return {
+        label: t('usage.overdraftProbeFailed'),
+        detail: `${attempts}/${limit} · ${windowLabel}`,
+        title: titleParts.join(' · '),
+        textClass: 'text-red-600 dark:text-red-400',
+        badgeClass: 'bg-red-50 dark:bg-red-950/40'
+      }
+    case 'inconclusive':
+      return {
+        label: t('usage.overdraftProbeInconclusive'),
+        detail: `${attempts}/${limit} · ${windowLabel}`,
+        title: titleParts.join(' · '),
+        textClass: 'text-amber-600 dark:text-amber-400',
+        badgeClass: 'bg-amber-50 dark:bg-amber-950/40'
+      }
+    case 'recovered':
+      return {
+        label: t('usage.overdraftRecovered'),
+        detail: windowLabel,
+        title: titleParts.join(' · '),
+        textClass: 'text-emerald-600 dark:text-emerald-400',
+        badgeClass: 'bg-emerald-50 dark:bg-emerald-950/40'
+      }
+    default:
+      return null
+  }
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
@@ -1443,9 +1537,14 @@ const attachVisibilityObserver = () => {
 }
 
 const loadActiveUsage = async () => {
+  if (activeQueryLoading.value || loading.value || props.batchedUsageLoading) return
   activeQueryLoading.value = true
   try {
-    usageInfo.value = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    const result = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    if (!unmounted.value) {
+      usageInfo.value = result
+      _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+    }
   } catch (e: any) {
     console.error('Failed to load active usage:', e)
   } finally {
@@ -1649,6 +1748,15 @@ watch(
     loadUsage({ source, bypassCache: true }).catch((e) => {
       console.error('Failed to refresh usage after manual refresh:', e)
     })
+  }
+)
+
+watch(
+  () => props.autoRefreshToken,
+  (nextToken, previousToken) => {
+    if (nextToken === previousToken) return
+    if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
+    void loadActiveUsage()
   }
 )
 

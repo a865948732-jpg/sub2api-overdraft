@@ -922,12 +922,24 @@ type GatewayConfig struct {
 	// CodexImageGenerationBridgeEnabled: 是否为 Codex `/v1/responses` 自动注入 image_generation 工具和桥接指令。
 	// 默认关闭，避免纯文本 Codex 请求被意外改写；显式携带 image_generation 工具的请求仍按分组能力转发。
 	CodexImageGenerationBridgeEnabled bool `mapstructure:"codex_image_generation_bridge_enabled"`
+	// CodexQuotaOverdraftEnabled: 是否启用 OpenAI OAuth Codex 5h/7d 额度透支。
+	// 包括请求注入、五次真实复核、调度门控和透支期用量统计；默认关闭。
+	CodexQuotaOverdraftEnabled bool `mapstructure:"codex_quota_overdraft_enabled"`
 	// ForcedCodexInstructionsTemplateFile: 服务端强制附加到 Codex 顶层 instructions 的模板文件路径。
 	// 模板渲染后会直接覆盖最终 instructions；若需要保留客户端 system 转换结果，请在模板中显式引用 {{ .ExistingInstructions }}。
 	ForcedCodexInstructionsTemplateFile string `mapstructure:"forced_codex_instructions_template_file"`
 	// ForcedCodexInstructionsTemplate: 启动时从模板文件读取并缓存的模板内容。
 	// 该字段不直接参与配置反序列化，仅用于请求热路径避免重复读盘。
 	ForcedCodexInstructionsTemplate string `mapstructure:"-"`
+	// OpenAIGroupPromptFile: 可选的分组级只读提示词文件。
+	// 只有 OpenAIGroupPromptGroupIDs 中列出的 API Key 分组会收到该提示词。
+	// 文件内容在启动时读取并缓存；空值表示功能关闭。
+	OpenAIGroupPromptFile string `mapstructure:"openai_group_prompt_file"`
+	// OpenAIGroupPromptGroupIDs: 逗号分隔的 API Key 分组 ID 白名单，例如 "8"。
+	// 空值不会启用分组级提示词，避免误把提示词注入所有租户。
+	OpenAIGroupPromptGroupIDs string `mapstructure:"openai_group_prompt_group_ids"`
+	// OpenAIGroupPrompt: 启动时缓存的分组级提示词内容，不参与配置反序列化。
+	OpenAIGroupPrompt string `mapstructure:"-"`
 	// OpenAIPassthroughAllowTimeoutHeaders: OpenAI 透传模式是否放行客户端超时头
 	// 关闭（默认）可避免 x-stainless-timeout 等头导致上游提前断流。
 	OpenAIPassthroughAllowTimeoutHeaders bool `mapstructure:"openai_passthrough_allow_timeout_headers"`
@@ -1830,6 +1842,23 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		}
 		cfg.Gateway.ForcedCodexInstructionsTemplate = string(content)
 	}
+	cfg.Gateway.OpenAIGroupPromptFile = strings.TrimSpace(cfg.Gateway.OpenAIGroupPromptFile)
+	cfg.Gateway.OpenAIGroupPromptGroupIDs = strings.TrimSpace(cfg.Gateway.OpenAIGroupPromptGroupIDs)
+	if cfg.Gateway.OpenAIGroupPromptFile != "" && cfg.Gateway.OpenAIGroupPromptGroupIDs != "" {
+		info, err := os.Stat(cfg.Gateway.OpenAIGroupPromptFile)
+		if err != nil {
+			return nil, fmt.Errorf("stat openai group prompt file %q: %w", cfg.Gateway.OpenAIGroupPromptFile, err)
+		}
+		const maxOpenAIGroupPromptBytes = 128 * 1024
+		if info.Size() > maxOpenAIGroupPromptBytes {
+			return nil, fmt.Errorf("openai group prompt file %q exceeds %d bytes", cfg.Gateway.OpenAIGroupPromptFile, maxOpenAIGroupPromptBytes)
+		}
+		content, err := os.ReadFile(cfg.Gateway.OpenAIGroupPromptFile)
+		if err != nil {
+			return nil, fmt.Errorf("read openai group prompt file %q: %w", cfg.Gateway.OpenAIGroupPromptFile, err)
+		}
+		cfg.Gateway.OpenAIGroupPrompt = strings.TrimSpace(string(content))
+	}
 
 	// 兼容旧键 gateway.disable_codex_originator_normalization：语义已被
 	// disable_codex_identity_enforcement 取代（身份改写升级为强制统一出口），
@@ -2292,6 +2321,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
+	viper.SetDefault("gateway.codex_quota_overdraft_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.4")
 	viper.SetDefault("gateway.live.max_session_duration_seconds", 3600)
@@ -2500,6 +2530,8 @@ func setDefaults() {
 // unmarshal, exactly as before.
 func setEnvReachableDefaults() {
 	viper.SetDefault("gateway.forced_codex_instructions_template_file", "")
+	viper.SetDefault("gateway.openai_group_prompt_file", "")
+	viper.SetDefault("gateway.openai_group_prompt_group_ids", "")
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)
 	viper.SetDefault("gateway.user_message_queue.mode", "")
 	viper.SetDefault("update.proxy_url", "")

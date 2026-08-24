@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Sub2API Logo" width="128" />
+<img src="assets/logo.svg" alt="sub2api-overdraft Logo" width="128" />
 
-# Sub2API
+# sub2api-overdraft
 
 [![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
@@ -10,13 +10,44 @@
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 
-<a href="https://trendshift.io/repositories/21823" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21823" alt="Wei-Shaw%2Fsub2api | Trendshift" width="250" height="55"/></a>
+**AI API gateway with Codex 5h / 7d quota overdraft probing, tracking, and recovery**
 
-**AI API Gateway Platform for Subscription Quota Distribution**
+**Version: v0.1.178 · Codex quota overdraft edition**
 
 English | [中文](README_CN.md) | [日本語](README_JA.md)
 
 </div>
+
+> [!IMPORTANT]
+> This is an unofficial fork of [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api), not an official Sub2API release. The upstream install script and `weishaw/sub2api:latest` image do not contain the overdraft feature. Build this fork from source as documented below.
+
+## Fork Features
+
+- Runs up to five real probes after the reported Codex 5h or 7d quota reaches 100%.
+- Keeps an account schedulable after a successful probe and tracks overdraft requests, tokens, cost, and recovery for both windows independently.
+- Exposes `pending`, `passed`, `failed`, `inconclusive`, and `recovered` states in the admin UI and PostgreSQL.
+- Uses an atomic PostgreSQL claim for multi-instance deployments and requires no schema migration.
+- Supports an immediate configuration rollback to the upstream scheduling behavior.
+
+See the **[Chinese deployment and operations guide](CODEX_OVERDRAFT_DEPLOYMENT_CN.md)** for source builds, migration, verification, upgrades, rollback, Nginx, and troubleshooting. Maintainers should also read [CODEX_QUOTA_OVERDRAFT_CUSTOMIZATION.md](CODEX_QUOTA_OVERDRAFT_CUSTOMIZATION.md).
+
+Quick start:
+
+```bash
+git clone https://github.com/a865948732-jpg/sub2api-overdraft.git
+cd sub2api-overdraft/deploy
+cp .env.example .env
+# Set POSTGRES_PASSWORD, JWT_SECRET, and TOTP_ENCRYPTION_KEY in .env
+mkdir -p data postgres_data redis_data
+docker compose \
+  -f docker-compose.local.yml \
+  -f docker-compose.overdraft.yml \
+  up -d --build
+```
+
+This fork remains licensed under [GNU LGPL-3.0](LICENSE) and preserves upstream attribution. The overdraft behavior may conflict with upstream provider terms and may incur real usage or account restrictions. Operators are responsible for compliance and risk.
+
+The remaining feature, deployment, sponsor, and license text is inherited from the upstream Sub2API documentation. Upstream sponsorship does not imply sponsorship or endorsement of this fork.
 
 ## ⚠️ Important Notice
 

@@ -391,6 +391,85 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('5h|18|900')
   })
 
+  it('OpenAI OAuth 自动刷新信号执行强制查询，并把同一信号传给次数查询', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: { utilization: 25, resets_at: null, remaining_seconds: 0 },
+      seven_day: { utilization: 50, resets_at: null, remaining_seconds: 0 }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 2011,
+          platform: 'openai',
+          type: 'oauth',
+          extra: {}
+        }),
+        autoRefreshToken: 0
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true,
+          OpenAIQuotaResetCell: {
+            props: ['account', 'autoRefreshToken'],
+            template: '<span data-test="quota-refresh-token">{{ autoRefreshToken }}</span>'
+          }
+        }
+      }
+    })
+
+    await flushPromises()
+    expect(getUsage).toHaveBeenCalledTimes(1)
+
+    await wrapper.setProps({ autoRefreshToken: 1 })
+    await flushPromises()
+
+    expect(getUsage).toHaveBeenCalledTimes(2)
+    expect(getUsage).toHaveBeenLastCalledWith(2011, 'active', true)
+    expect(wrapper.get('[data-test="quota-refresh-token"]').text()).toBe('1')
+    wrapper.unmount()
+  })
+
+  it('OpenAI OAuth 自动查询仍在进行时跳过下一次刷新信号', async () => {
+    let resolveRefresh!: (value: any) => void
+    getUsage
+      .mockResolvedValueOnce({
+        five_hour: { utilization: 10, resets_at: null, remaining_seconds: 0 },
+        seven_day: { utilization: 20, resets_at: null, remaining_seconds: 0 }
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRefresh = resolve
+      }))
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 2012, platform: 'openai', type: 'oauth', extra: {} }),
+        autoRefreshToken: 0
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true,
+          OpenAIQuotaResetCell: true
+        }
+      }
+    })
+
+    await flushPromises()
+    await wrapper.setProps({ autoRefreshToken: 1 })
+    await wrapper.setProps({ autoRefreshToken: 2 })
+    await flushPromises()
+    expect(getUsage).toHaveBeenCalledTimes(2)
+
+    resolveRefresh({
+      five_hour: { utilization: 11, resets_at: null, remaining_seconds: 0 },
+      seven_day: { utilization: 21, resets_at: null, remaining_seconds: 0 }
+    })
+    await flushPromises()
+    wrapper.unmount()
+  })
+
   it('OpenAI OAuth 在无 codex 快照时会回退显示 usage 接口窗口', async () => {
 	getUsage.mockResolvedValue({
 	  five_hour: {
@@ -620,6 +699,51 @@ describe('AccountUsageCell', () => {
   expect(getUsage).toHaveBeenCalledWith(2004)
   expect(wrapper.text()).toContain('5h|100|106540000')
   expect(wrapper.text()).toContain('7d|100|106540000')
+  })
+
+  it('OpenAI OAuth 会显示五次探测确认的限额状态', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: {
+        utilization: 100,
+        resets_at: '2099-03-07T12:00:00Z',
+        remaining_seconds: 3600
+      },
+      seven_day: null,
+      codex_quota_overdraft: {
+        status: 'failed',
+        quota_window: '5h',
+        cycle_key: '5h:4076577600',
+        attempts: 5,
+        limit: 5,
+        model: 'gpt-5.5',
+        reason_code: 'quota_limited',
+        started_at: '2099-03-07T10:00:00Z',
+        tested_at: '2099-03-07T10:01:00Z',
+        recover_at: '2099-03-07T12:00:00Z'
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 2005,
+          platform: 'openai',
+          type: 'oauth',
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('usage.overdraftProbeFailed')
+    expect(wrapper.text()).toContain('5/5 · 5h')
   })
 
   it('Key 账号会展示 today stats 徽章并带 A/U 提示', async () => {

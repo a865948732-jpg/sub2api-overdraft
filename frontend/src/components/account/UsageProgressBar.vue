@@ -25,6 +25,19 @@
       </div>
     </div>
 
+    <div
+      v-if="overdraftActive"
+      class="mb-0.5 flex items-center gap-1.5 text-[9px] text-red-600 dark:text-red-400"
+      :title="overdraftTitle"
+    >
+      <span class="rounded bg-red-50 px-1.5 py-0.5 font-medium dark:bg-red-950/40">
+        {{ t('usage.overdraftActive') }}
+      </span>
+      <span v-if="overdraftStats" class="text-gray-500 dark:text-gray-400">
+        {{ formatOverdraftRequests }} req · {{ formatOverdraftTokens }} · ${{ formatOverdraftCost }}
+      </span>
+    </div>
+
     <!-- Progress bar row -->
     <div class="flex items-center gap-1">
       <!-- Label badge (fixed width for alignment) -->
@@ -70,6 +83,10 @@ const props = defineProps<{
   windowStats?: WindowStats | null
   showNowWhenIdle?: boolean
   remainingCapacity?: boolean
+  overdraftActive?: boolean
+  overdraftStats?: WindowStats | null
+  overdraftStartedAt?: string | null
+  overdraftRecoverAt?: string | null
 }>()
 
 const { t } = useI18n()
@@ -216,6 +233,26 @@ const formatAccountCost = computed(() => {
 const formatUserCost = computed(() => {
   if (!props.windowStats || props.windowStats.user_cost == null) return '0.00'
   return props.windowStats.user_cost.toFixed(2)
+})
+
+const formatOverdraftRequests = computed(() => {
+  if (!props.overdraftStats) return ''
+  return formatCompactNumber(props.overdraftStats.requests, { allowBillions: false })
+})
+
+const formatOverdraftTokens = computed(() => {
+  if (!props.overdraftStats) return ''
+  return formatCompactNumber(props.overdraftStats.tokens)
+})
+
+const formatOverdraftCost = computed(() => {
+  if (!props.overdraftStats) return '0.00'
+  return props.overdraftStats.cost.toFixed(2)
+})
+
+const overdraftTitle = computed(() => {
+  if (!props.overdraftRecoverAt) return t('usage.overdraftActive')
+  return `${t('usage.overdraftActive')} · ${t('usage.overdraftRecoverAt')}: ${new Date(props.overdraftRecoverAt).toLocaleString()}`
 })
 
 </script>

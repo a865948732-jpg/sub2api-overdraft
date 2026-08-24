@@ -1,0 +1,11 @@
+# Optional safe CTF prompt overlay for the 穿山甲组 (group_id=8).
+# Copy this file and the prompts directory into the runtime Compose directory.
+# Relative paths are then resolved from that runtime directory.
+
+services:
+  sub2api:
+    volumes:
+      - ./prompts/dabaihua-defensive-ctf.md:/app/data/dabaihua-defensive-ctf.md:ro
+    environment:
+      - GATEWAY_OPENAI_GROUP_PROMPT_FILE=/app/data/dabaihua-defensive-ctf.md
+      - GATEWAY_OPENAI_GROUP_PROMPT_GROUP_IDS=${GATEWAY_OPENAI_GROUP_PROMPT_GROUP_IDS:-8}

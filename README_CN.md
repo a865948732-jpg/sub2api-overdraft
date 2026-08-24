@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Sub2API Logo" width="128" />
+<img src="assets/logo.svg" alt="sub2api-overdraft Logo" width="128" />
 
-# Sub2API
+# sub2api-overdraft
 
 [![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
@@ -10,14 +10,75 @@
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 
-<a href="https://trendshift.io/repositories/21823" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21823" alt="Wei-Shaw%2Fsub2api | Trendshift" width="250" height="55"/></a>
+**带 Codex 5h / 7d 额度透支探测、统计与恢复的 AI API 网关**
 
-**AI API 网关平台 - 订阅配额分发管理**
+**版本：v0.1.178（Codex 额度透支功能版）**
 
 [English](README.md) | 中文 | [日本語](README_JA.md)
 
 </div>
 
+> [!IMPORTANT]
+> 这是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的非官方 Fork，不是 Sub2API 官方发行版。官方安装脚本和 `weishaw/sub2api:latest` 镜像不包含本项目的透支功能，请按本仓库的源码构建文档部署。
+
+## 本 Fork 增加的功能
+
+- Codex 5h / 7d 额度达到 100% 后，最多执行 5 次真实请求探测，判断账号是否仍可继续调用。
+- 探测成功后继续参与账号调度，并分别统计 5h / 7d 透支期请求数、Token 和金额。
+- 管理页面显示“透支探测中”“透支中”“已确认限额”“探测无法确认”和“额度已恢复”。
+- 网络、超时、5xx 和普通瞬时 429 不会被误判为额度耗尽；401/403、账号禁用和其他风控仍使用原有策略。
+- 多实例通过 PostgreSQL 原子领取（atomic claim）去重；状态保存在现有 `accounts.extra`，无需新增数据表。
+- 可通过一个配置开关立即关闭，恢复上游 Sub2API 的调度和请求行为。
+
+## 快速部署
+
+完整步骤、现有服务器迁移、Nginx、验证、升级和故障排查请阅读：
+
+**[sub2api-overdraft 部署与运维指南](CODEX_OVERDRAFT_DEPLOYMENT_CN.md)**
+
+最短部署流程：
+
+```bash
+git clone https://github.com/a865948732-jpg/sub2api-overdraft.git
+cd sub2api-overdraft/deploy
+cp .env.example .env
+chmod 600 .env
+# 编辑 .env，至少设置 POSTGRES_PASSWORD、JWT_SECRET 和 TOTP_ENCRYPTION_KEY
+mkdir -p data postgres_data redis_data
+docker compose \
+  -f docker-compose.local.yml \
+  -f docker-compose.overdraft.yml \
+  up -d --build
+```
+
+源码中的 `deploy/config.example.yaml` 只是模板。运行配置通常位于 `deploy/data/config.yaml`。透支开关为：
+
+```yaml
+gateway:
+  codex_quota_overdraft_enabled: true
+```
+
+公开的 `docker-compose.overdraft.yml` 已通过环境变量默认开启该功能。
+
+## 如何确认透支成功
+
+账号额度达到 100% 后检查日志：
+
+```bash
+docker logs --since 30m sub2api 2>&1 | \
+  grep -E 'codex_quota_overdraft_(probe|state|pause|stale_rate_limit)'
+```
+
+出现 `codex_quota_overdraft_probe_passed`，页面显示“透支中”，并且后续真实业务请求成功，即可确认透支功能完整生效。OpenAI OAuth 常规文本“测试账号连接”也会使用透支请求形态并接入同一探测状态机；API Key、Shadow、图片和 Compact 测试除外。额度未达到 100% 时没有探测日志是正常现象。
+
+## 来源、许可证与风险
+
+- 上游项目：[Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api)
+- 透支逻辑参考：[Mxucc/cpa-account-config-manager](https://github.com/Mxucc/cpa-account-config-manager)
+- 许可证：[GNU LGPL-3.0](LICENSE)，保留上游版权和许可证声明。
+- 本功能不保证上游一定允许超额调用，探测和后续请求可能产生真实用量，也可能触发账号限制。请自行核对上游服务条款并承担使用风险。
+
+下面的功能、部署和赞助信息继承自上游 Sub2API 文档。上游赞助关系不代表这些组织赞助或认可本 Fork；需要透支功能时，请以上方本 Fork 部署指南为准。
 
 ## ⚠️ 重要提醒
 

@@ -73,6 +73,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
+	if promptedBody, promptErr := s.applyConfiguredOpenAIGroupPrompt(c, body, openAIGroupPromptModeChatCompletions); promptErr != nil {
+		return nil, fmt.Errorf("apply openai group prompt: %w", promptErr)
+	} else {
+		body = promptedBody
+	}
+
 	if account.Platform == PlatformGrok {
 		if account.IsGrokOAuth() {
 			if eligible, reason := grokChatResponsesBridgeEligibility(body); eligible {

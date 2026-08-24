@@ -149,9 +149,12 @@ import {
 } from '@/api/admin/accounts'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   account: Account
-}>()
+  autoRefreshToken?: number
+}>(), {
+  autoRefreshToken: 0
+})
 
 const emit = defineEmits<{
   'account-updated': [account: Account]
@@ -410,6 +413,14 @@ watch(
     resetting.value = false
     showResetConfirm.value = false
     showResetCreditDetails.value = false
+  }
+)
+
+watch(
+  () => props.autoRefreshToken,
+  (nextToken, previousToken) => {
+    if (nextToken === previousToken || !visible.value) return
+    void handleQuery()
   }
 )
 
