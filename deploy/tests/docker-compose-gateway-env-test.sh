@@ -25,6 +25,13 @@ for compose_file in \
 do
   tab=$(printf '\t')
   while IFS="$tab" read -r key value; do
+    # Codex quota overdraft is an optional fork-only overlay variable. It is
+    # intentionally declared in docker-compose.overdraft.yml rather than the
+    # official/base Compose files checked here.
+    if [ "$key" = "GATEWAY_CODEX_QUOTA_OVERDRAFT_ENABLED" ]; then
+      continue
+    fi
+
     # .env.example intentionally includes high-capacity tuning examples for
     # these values. An unconfigured Compose deployment must retain the
     # backend defaults instead of silently adopting the examples.
