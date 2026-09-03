@@ -6,7 +6,13 @@ on:
       version:
         description: Image version
         required: true
-        default: "0.1.185"
+        type: string
+        default: "0.2.0"
+      publish_latest:
+        description: Also update the latest tag after verification
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,16 +36,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build image for verification
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/sub2api-overdraft:latest
-            ghcr.io/${{ github.repository_owner }}/sub2api-overdraft:${{ inputs.version }}
+          load: true
+          push: false
+          tags: ghcr.io/${{ github.repository_owner }}/sub2api-overdraft:${{ inputs.version }}
           build-args: |
             VERSION=${{ inputs.version }}
             COMMIT=${{ github.sha }}
@@ -47,3 +52,34 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+
+      - name: Verify image identity
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/sub2api-overdraft
+          EXPECTED_VERSION: ${{ inputs.version }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version_output="$(docker run --rm --entrypoint /app/sub2api "${IMAGE}:${EXPECTED_VERSION}" -version 2>&1)"
+          printf '%s\n' "${version_output}"
+          grep -Fq "Sub2API ${EXPECTED_VERSION} (commit: ${EXPECTED_COMMIT}," <<<"${version_output}"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${IMAGE}:${EXPECTED_VERSION}")" = "linux/amd64"
+
+      - name: Push verified version image
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/sub2api-overdraft
+          VERSION: ${{ inputs.version }}
+        run: docker push "${IMAGE}:${VERSION}"
+
+      - name: Update latest tag
+        if: ${{ inputs.publish_latest }}
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/sub2api-overdraft
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
